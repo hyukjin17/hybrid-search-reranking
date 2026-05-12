@@ -1,6 +1,6 @@
 # Hybrid Search & Intent-Aware Reranking
 
-<img width="800" height="458" alt="Search Demo" src="https://github.com/user-attachments/assets/5aee9065-7424-4550-b92d-f02c463f6794" />
+<img width="1102" height="632" alt="Search Demo" src="https://github.com/user-attachments/assets/cc139870-2010-441c-b3ed-4643ff6c0b91" />
 
 Hybrid e-commerce search pipeline that combines **lexical matching (BM25)** and **semantic understanding (Two-Tower BERT)** with an **Intent-Aware Neural Reranker**
 
