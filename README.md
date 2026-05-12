@@ -1,5 +1,7 @@
 # Hybrid Search & Intent-Aware Reranking
 
+<img width="800" height="458" alt="Search Demo" src="https://github.com/user-attachments/assets/5aee9065-7424-4550-b92d-f02c463f6794" />
+
 Hybrid e-commerce search pipeline that combines **lexical matching (BM25)** and **semantic understanding (Two-Tower BERT)** with an **Intent-Aware Neural Reranker**
 
 Built on the Amazon ESCI (Shopping Queries) dataset, this project tackles the "Homogeneity Trap" in e-commerce search by dynamically balancing text relevance, semantic intent, and product popularity based on the complexity of the user's query
