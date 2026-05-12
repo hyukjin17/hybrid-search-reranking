@@ -1,77 +1,119 @@
-# Hybrid Search Reranking
+# Hybrid Search & Intent-Aware Reranking
 
-Hybrid product search system combining keyword matching (BM25) and semantic understanding (Two-Tower BERT) with a learned reranker.
+Hybrid e-commerce search pipeline that combines **lexical matching (BM25)** and **semantic understanding (Two-Tower BERT)** with an **Intent-Aware Neural Reranker**
 
-## What it does
+Built on the Amazon ESCI (Shopping Queries) dataset, this project tackles the "Homogeneity Trap" in e-commerce search by dynamically balancing text relevance, semantic intent, and product popularity based on the complexity of the user's query
 
-User searches "running shoes for seniors" → returns the 48 most relevant products from 2.6M items.
+---
 
-## How it works
+## The Problem: Vague vs. Complex Queries
+Standard search engines often struggle to adapt to user intent:
+* **Vague Queries (e.g., *"shoes"*):** Standard engines often return random exact-text matches. Users actually want to see highly popular, well-reviewed items from diverse sub-categories (Exploration).
+* **Complex Queries (e.g., *"red nike running shoes under $100"*):** Standard engines heavily weight popularity, returning best-selling items that ignore the strict constraints (Precision).
 
-1. **BM25** - finds products containing the search words
-2. **Two-Tower** - finds products with similar meaning (even without exact word matches)
-3. **Merge** - combines both result sets
-4. **Rerank** - neural network picks the best 48
+**Our Solution:** A hybrid pipeline that routes candidates through a deep neural network trained via Pairwise Ranking, applying dynamic weights to price, popularity, and text-match based on query specificity (IDF).
 
-## Why both?
+## Best of Both Worlds
 
-| BM25 wins | Neural wins |
-|-----------|-------------|
-| "iPhone 15 Pro Max" | "gift for outdoorsy dad" |
-| "SKU-12345" | "comfy WFH chair" |
+| Query Type   | Behavior                          |
+| ------------ | --------------------------------- |
+| Exact        | BM25 dominates                    |
+| Conceptual   | Semantic dominates                |
+| Ambiguous    | Inconsistent ranking behavior     |
 
-## Tech stack
+- **Lexical search (BM25)** is fast but struggles with synonyms and semantic intent.
+- **Semantic neural retrieval** captures meaning but suffers from domain gap and inconsistency on exact-match queries.
 
-- Python, PyTorch
-- BERT (embeddings)
-- FAISS (fast vector search)
-- rank_bm25 (keyword search)
+---
 
-## Team
+## Core Architecture
 
-Gyula Planky, Jian Gao, Hyuk Jin Chung
+### Stage 1: Hybrid Retrieval 
+* **Lexical Retrieval (BM25):** Handles exact SKU matches, brand names, and highly specific vocabulary.
+* **Semantic Retrieval (Two-Tower BERT):** Captures the latent meaning of queries using FAISS for high-speed vector similarity search.
+* **Merge & Deduplicate:** Fetches the Top-K candidates from both indices to ensure high Recall (and removes duplicate results).
 
+### Stage 2: Intent-Aware Neural Reranker
+* **Architecture:** A deep Feed-Forward Network trained to predict the final utility of a query-product pair.
+* **Pairwise Learning:** Utilizes `MarginRankingLoss`, `LayerNorm`, and `LeakyReLU` to evaluate pairs of items (Item A vs. Item B). By learning relative ranking margins instead of pointwise global averages, the network avoids flatlining on heavily imbalanced tabular data.
+* **Engineered Features (14+ Dimensions):**
+  * *Relevance:* BM25 Score, Semantic Cosine Similarity, Exact Word Overlap.
+  * *Query Complexity:* IDF (Inverse Document Frequency) Mean, Query Length.
+  * *Implicit Popularity & Trust:* Brand Frequency, Product Frequency, Bullet Point Count.
+  * *Business Logic (from ESCI-S):* Price Percentile, Review Score, Review Count, Price Intent Keywords.
 
-## Preliminary Architecture
-<img width="8192" height="6999" alt="Untitled Diagram-2026-02-18-013721" src="https://github.com/user-attachments/assets/2c2ea3c6-ed8a-48fa-a84b-04c393847488" />
+```
+TRAINING
+ESCI / ESCI-S Data ──► BM25 + Two-Tower Indexing ──► Sparse & Dense Index files
+                                                              │
+                                                              ▼
+                                              Reranker (Pairwise MLP)
+                                                              │
+                                                              ▼
+                                       Weights (.pth) + Normalization Stats (.json)
+ 
+INFERENCE
+User Query ──► BM25 + Two-Tower Lookup ──► Merge + Dedupe ──► Reranker + MMR ──► Top-20
+              [RETRIEVAL]                  [FUSION]          [RANKING]
+                  │                            │                  │
+              2.6M indexed              150-300 candidates   20 final results
+```
 
-## 2nd Iteration of our Architecture
+---
+ 
+## Dataset
+ 
+We use the **Amazon ESCI dataset** combined with **ESCI-S** for richer product signals.
+ 
+**ESCI (base)**
+- 130K+ queries, 2.6M+ human-labeled judgements, 3 languages
+- ~20 labeled items per query (median 16)
+- Four-way relevance labels: **E**xact, **S**ubstitute, **C**omplement, **I**rrelevant
+- Native train/test split; we further split training into 85/15 train/validation
+**ESCI-S (enrichment)**
+- Star ratings, review counts, price, and category hierarchy
+- Covers 1.66M products
+- Fills the gap left by ESCI's text-only labels — provides the behavioral and numerical signals real ranking systems rely on
+Together they give the pipeline both semantic richness and real-world product signals.
+ 
+---
 
-<img width="716" height="713" alt="Screenshot 2026-03-03 at 19 06 48" src="https://github.com/user-attachments/assets/6f28f390-4609-4aa5-88b8-16e25ebe1104" />
-<img width="716" height="663" alt="Screenshot 2026-03-03 at 19 06 37" src="https://github.com/user-attachments/assets/ed6933d5-990f-408f-8ac6-2348cdcb01c4" />
-<img width="716" height="608" alt="Screenshot 2026-03-03 at 19 06 28" src="https://github.com/user-attachments/assets/16b3a438-c6fa-4f34-afa0-cd9aee0364aa" />
-<img width="716" height="661" alt="Screenshot 2026-03-03 at 19 06 02" src="https://github.com/user-attachments/assets/de4f82c0-cd76-401a-8112-8e82c8abeb15" />
+## Custom Evaluation: Adaptive-NDCG (A-NDCG)
+Standard NDCG strictly penalizes non-exact matches. We developed **Adaptive-NDCG** to evaluate the model based on actual user intent:
+* For **Vague Queries (Low IDF)**, highly-rated "Substitute" items receive a boosted Gain score, as the user intent is exploratory window-shopping.
+* For **Specific Queries (High IDF)**, strict penalties are applied to items that violate explicit constraints (e.g., missing a brand or price limit), preserving precision.
 
+---
 
 ## Project Structure
 
-```
+```text
 .
-├── retrieval/          # First-stage retrieval (BM25 + Two-Tower)
-│   ├── bm25.py         # BM25 lexical scoring and index building
+├── retrieval/          # First-stage retrieval logic
+│   ├── bm25.py         # BM25 lexical scoring and FAISS index building
 │   └── two_tower.py    # Two-tower semantic scoring and index building
 ├── reranking/          # Second-stage neural reranking
-│   ├── model.py        # DeepESCIReranker architecture
-│   └── features.py     # Feature extraction + PairwiseESCIDataset
+│   ├── model.py        # Deep Pairwise Reranker architecture (LayerNorm + LeakyReLU)
+│   └── features.py     # Feature extraction + Pairwise ESCI Dataset loaders
 ├── evaluation/         # Metrics and evaluation
-│   ├── metrics.py      # NDCG@K, DCG, Recall@K
+│   ├── metrics.py      # Standard NDCG@10, Recall@K, and Custom A-NDCG
 │   ├── evaluate_retrieval.py
 │   └── evaluate_reranker.py
-├── analysis/           # Query complexity analysis
+├── analysis/           # Query complexity and intent analysis
 │   ├── concept_entropy.py
-│   └── idf_setup.py
-├── scripts/            # All runnable entry points
-│   ├── run_pipeline.py             # Main pipeline (load, score, evaluate)
-│   ├── build_indices.py            # Build BM25 + Two-Tower indices
-│   ├── generate_bm25_scores.py     # Generate BM25 scores for train/test
-│   ├── generate_two_tower_scores.py # Generate Two-Tower scores for train/test
-│   ├── train_two_tower.py          # Fine-tune the Two-Tower model
-│   └── train_reranker.py           # Train the neural reranker
-├── tests/
-├── models/             # Saved model weights (gitignored)
-├── output/             # Generated scores, predictions, indices (gitignored)
-├── esci-data/          # Amazon ESCI dataset (gitignored)
-└── config.py           # Global paths and settings
+│   └── idf_setup.py    # IDF specificity calculations
+├── scripts/            # Executable entry points
+│   ├── run_pipeline.py             # End-to-end pipeline execution
+│   ├── build_indices.py            # Pre-compute BM25 + FAISS embeddings
+│   ├── generate_bm25_scores.py     # Batch generate Train/Test BM25 scores
+│   ├── generate_two_tower_scores.py# Batch generate Train/Test Semantic scores
+│   ├── train_two_tower.py          # Fine-tune the HuggingFace BERT encoder
+│   └── train_reranker.py           # Train the Deep Pairwise Reranker
+├── tests/              # Unit tests for retrieval and reranking logic
+├── models/             # Saved .pth weights (Git-ignored)
+├── output/             # Generated CSV scores and predictions (Git-ignored)
+├── esci-data/          # Amazon ESCI & ESCI-S Parquet datasets (Git-ignored)
+└── config.py           # Global paths, split controls, and hyperparameters
 ```
 
 ## How to run
@@ -144,35 +186,3 @@ The test suite validates the two-tower retrieval logic against a small synthetic
 - **Semantic relevance** — the model ranks semantically relevant items higher than irrelevant ones (e.g. "running shoes" scores higher than "coffee maker" for a running shoes query)
 - **No duplicates** — each item appears only once per query
 - **Input validation** — passing a dataframe with missing required columns raises a `ValueError`
-
-## Recent restructuring
-
-The project folder structure was reorganized to make navigation easier. No logic was changed — only file locations and imports.
-
-### What moved where
-
-| Old location | New location | Why |
-|---|---|---|
-| `signals/bm25.py`, `signals/two_tower.py` | `retrieval/bm25.py`, `retrieval/two_tower.py` | "Signals" was vague — these are retrieval modules |
-| `signals/generate_bm25_scores.py` | `scripts/generate_bm25_scores.py` | Runnable scripts belong together |
-| `signals/generate_two_tower_scores.py` | `scripts/generate_two_tower_scores.py` | Same |
-| `signals/train_two_tower.py` | `scripts/train_two_tower.py` | Same |
-| `main.py` | `scripts/run_pipeline.py` | Keep root clean, scripts in one place |
-| `build_search_engine_indices.py` | `scripts/build_indices.py` | Same |
-| `query_complexity_metric/` | `analysis/` | Shorter name, added `__init__.py` |
-
-### `baseline_reranker.py` split into `reranking/`
-
-The 317-line monolith contained the model class, feature extraction, dataset class, and training loop all in one file. It's now three files:
-
-- **`reranking/model.py`** — `DeepESCIReranker` class (single source of truth)
-- **`reranking/features.py`** — `extract_esci_features()` + `PairwiseESCIDataset`
-- **`scripts/train_reranker.py`** — the training loop
-
-`DeepESCIReranker` was previously copy-pasted in `baseline_reranker.py`, `evaluation/evaluate_reranker.py`, and `tests/test_custom_search.py`. Now they all import from `reranking.model`.
-
-### Import cleanup
-
-- All `from signals.` imports updated to `from retrieval.`
-- Old relative imports (e.g. `from bm25 import`, `from metrics import`) changed to absolute (e.g. `from retrieval.bm25 import`, `from evaluation.metrics import`)
-- `sys.path` hacks standardized and placed before project imports in every file that needs them
