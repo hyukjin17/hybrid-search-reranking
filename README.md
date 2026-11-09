@@ -8,6 +8,30 @@ Built on the Amazon ESCI (Shopping Queries) dataset, this project tackles the "H
 
 ---
 
+## My Contribution (Hyuk Jin Chung, @hyukjin17)
+
+I designed and implemented the **second stage of the pipeline** from scratch: the neural rerankers, the MMR diversity layer, and the custom Adaptive-NDCG evaluation metric. My teammates built the first-stage retrieval (BM25 and the Two-Tower encoder), and my work takes their merged candidate set and turns it into the final ranked results.
+
+**Baseline Reranker: 9 features** (`reranking/model.py`, `reranking/features.py`, `scripts/train_reranker.py`)
+- Built the feature extraction pipeline covering text relevance (BM25 score, semantic similarity, word overlap), query/title length, and implicit popularity signals (brand/product frequency, bullet count).
+- Designed `DeepESCIReranker`, a 3-layer MLP with BatchNorm and ReLU, trained with Adam, ReduceLROnPlateau, and early stopping.
+
+**Advanced Reranker: 17 features** (`reranking/advanced_model.py`, `reranking/advanced_features.py`, `scripts/train_adv_reranker.py`)
+- Extended the feature set with ESCI-S enrichment data, adding query-intent features (budget parsed from the query, "cheap" intent, IDF-based specificity), item-authority features (price, star rating, review count, with missingness indicators), and interaction features (over-budget flag, brand match, color match, dominant-category match).
+- Designed `AdvancedDeepReranker` with LayerNorm, LeakyReLU, and dropout, trained with AdamW and cosine annealing.
+
+**Pairwise Training (both versions)**
+- Trained both rerankers with **pairwise `MarginRankingLoss`** over ESCI-labeled (query, positive, negative) triplets. Learning relative margins instead of pointwise scores kept the models from flatlining on the heavily imbalanced label distribution.
+- Wrote the pairwise dataset loaders and saved normalization stats so the same feature scaling is applied at inference time.
+
+**MMR Diversity**
+- Implemented Maximal Marginal Relevance (λ = 0.6) on top of the reranker's scores to penalize repeated brands in the top results, so vague queries like *"shoes"* surface a varied set of products instead of near-duplicates.
+
+**Adaptive-NDCG Evaluation** (`evaluation/metrics.py`)
+- Designed a custom NDCG variant that scores results against user intent instead of strict label matching. For vague (low-IDF) queries, highly rated Substitute items get boosted gain, reflecting exploratory shopping. For specific (high-IDF) queries, results that violate explicit constraints, such as going over a stated budget, are penalized, and star rating breaks ties within the same ESCI label.
+
+---
+
 ## The Problem: Vague vs. Complex Queries
 Standard search engines often struggle to adapt to user intent:
 * **Vague Queries (e.g., *"shoes"*):** Standard engines often return random exact-text matches. Users actually want to see highly popular, well-reviewed items from diverse sub-categories (Exploration).
